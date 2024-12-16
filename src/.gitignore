@@ -1,0 +1,8 @@
+# Ignore everything
+*
+
+# But not this file
+!.gitignore
+
+# And not lambda_function.py
+!lambda_function.py

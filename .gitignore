@@ -1,0 +1,16 @@
+.direnv
+.envrc
+result
+dist
+__pycache__/
+*.py[cod]
+*.pyd
+*.egg-info/
+dist/
+build/
+*.egg
+*.log
+*.tmp
+*.bak
+*.swp
+*.env
