@@ -1,189 +1,174 @@
 import json
 import subprocess
 import os
-import traceback
-import sys
-import io
+import tempfile
 import base64
+import glob
 import unittest
 
-
-
 def lambda_handler(event, context):
-    stdout = io.StringIO()
-    stderr = io.StringIO()
-    sys.stdout = stdout
-    sys.stderr = stderr
-
-    out = "/tmp/out/"
-
     try:
+        code = event.get("code")
+        if not code:
+            return {
+                "statusCode": 400,
+                "body": json.dumps({
+                    "error": "No 'code' field provided in event",
+                    "stdout": "",
+                    "stderr": "",
+                    "exit_code": -1,
+                    "files": {}
+                } )
+            }
 
-        _body = event["body"]
-
-        body: dict
-
-        if isinstance(_body, str):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            script_path = os.path.join(temp_dir, "script.py")
             try:
-                body: dict = json.loads(_body)
+                with open(script_path, "w") as f:
+                    f.write(code)
             except Exception as e:
                 return {
-                    'statusCode': 400,
-                    'body': json.dumps(dict(
-                        server_error="REQUEST_NOT_JSON",
-                    ))
+                    "statusCode": 500,
+                    "body": json.dumps({
+                        "error": f"Failed to write script file: {str(e)}",
+                        "stdout": "",
+                        "stderr": "",
+                        "exit_code": -1,
+                        "files": {}
+                    })
                 }
-        elif isinstance(_body, dict):
-            body: dict = _body
 
-        else:
+            try:
+                env = os.environ.copy()
+                env["PYTHONPATH"] = f"{env.get('PWD', '')}:{env.get('PYTHONPATH', '')}"
+                result = subprocess.run(
+                    ["python3", script_path],
+                    capture_output=True,
+                    text=True,
+                    cwd=temp_dir,
+                    timeout=5,
+                    env=env,
+                )
+                stdout = result.stdout
+                stderr = result.stderr
+                exit_code = result.returncode
+            except subprocess.TimeoutExpired:
+                return {
+                    "statusCode": 500,
+                    "body": json.dumps({
+                        "error": "Script execution timed out",
+                        "stdout": "",
+                        "stderr": "",
+                        "exit_code": -1,
+                        "files": {}
+                    })
+                }
+            except subprocess.SubprocessError as e:
+                return {
+                    "statusCode": 500,
+                    "body": json.dumps({
+                        "error": f"Script execution failed: {str(e)}",
+                        "stdout": "",
+                        "stderr": "",
+                        "exit_code": -1,
+                        "files": {}
+                    })
+                }
+
+            files = {}
+            for file_path in glob.glob(f"{temp_dir}/**/*", recursive=True):
+                if os.path.isfile(file_path) and file_path != script_path:
+                    try:
+                        with open(file_path, "rb") as f:
+                            file_content = f.read()
+                            file_base64 = base64.b64encode(file_content).decode("utf-8")
+                            relative_path = os.path.relpath(file_path, temp_dir)
+                            files[relative_path] = file_base64
+                    except Exception as e:
+                        stderr += f"\nError reading file {file_path}: {str(e)}"
+
             return {
-                'statusCode': 400,
-                'body': json.dumps(dict(
-                        server_error="REQUEST_INVALID",
-                    ))
+                "statusCode": 200,
+                "body": json.dumps({
+                    "stdout": stdout,
+                    "stderr": stderr,
+                    "exit_code": exit_code,
+                    "files": files
+                })
             }
-
-        # Check if "code" key is in the event body
-        if "code" not in body:
-            return {
-                'statusCode': 400,
-                'body': json.dumps(dict(
-                        server_error="RESPONSE_NO_CODE",
-                    ))
-            }
-
-
-        os.system(f"mkdir -p {out}")
-
-
-        code: str = body["code"]
-
-        error = None
-
-        try:
-            exec(code)
-        except Exception as e:
-            error: str = traceback.format_exc()
-
-
-        base64_files = []
-
-        for file in os.listdir(out):
-            with open(f"{out}{file}", "rb") as f:
-                image_data = f.read()
-                base64_data = base64.b64encode(image_data).decode('utf-8')
-                base64_files.append(dict(
-                    name=file,
-                    data=base64_data
-                ))
-
-        return {
-            'statusCode': 200,
-            'body': json.dumps(dict(
-                error=error,
-                stdout=stdout.getvalue(),
-                stderr=stderr.getvalue(),
-                files=base64_files
-            ))
-        }
 
     except Exception as e:
-        # Server exceptions
         return {
-            'statusCode': 500,
-            'body': json.dumps(f"Server Error: {str(e)}")
+            "statusCode": 500,
+            "body": json.dumps({
+                "error": f"Unexpected error: {str(e)}",
+                "stdout": "",
+                "stderr": "",
+                "exit_code": -1,
+                "files": {}
+            })
         }
-    finally:
-        sys.stdout = sys.__stdout__
-        sys.stderr = sys.__stderr__
-        os.system(f"rm -rf {out}")
 
+class TestLambdaHandler(unittest.TestCase):
+    def setUp(self):
+        self.context = None
 
-class Test(unittest.TestCase):
-    def test_lambda_handler(self):
-        event = {
-            "body": {
-                "code": "print('Hello, World!')"
-            }
-        }
-        context = None
-        response = lambda_handler(event, context)
-        self.assertEqual(response['statusCode'], 200)
-        self.assertIn("Hello, World!", response['body'])
+    def test_successful_execution(self):
+        event = {"code": "print('Hello, World!')"}
+        response = lambda_handler(event, self.context)
+        body = json.loads(response["body"])
 
-    def test_lambda_handler_error(self):
-        event = {
-            "body": {
-                "code": "raise Exception('Test error')"
-            }
-        }
-        context = None
-        response = lambda_handler(event, context)
-        self.assertEqual(response['statusCode'], 200)
-        self.assertIn("Test error", response['body'])
+        self.assertEqual(response["statusCode"], 200)
+        self.assertEqual(body["stdout"], "Hello, World!\n")
+        self.assertEqual(body["stderr"], "")
+        self.assertEqual(body["exit_code"], 0)
+        self.assertEqual(body["files"], {})
 
-    def test_lambda_handler_invalid_request(self):
-        event = {
-            "body": "invalid request"
-        }
-        context = None
-        response = lambda_handler(event, context)
-        self.assertEqual(response['statusCode'], 400)
-        self.assertIn("REQUEST_NOT_JSON", response['body'])
+    def test_module_import(self):
+        event = {"code": "import PIL"}
+        response = lambda_handler(event, self.context)
+        body = json.loads(response["body"])
 
-    def test_lambda_handler_no_code(self):
-        event = {
-            "body": {}
-        }
-        context = None
-        response = lambda_handler(event, context)
-        self.assertEqual(response['statusCode'], 400)
-        self.assertIn("RESPONSE_NO_CODE", response['body'])
+        self.assertEqual(response["statusCode"], 200)
+        self.assertEqual(body["stdout"], "")
+        self.assertEqual(body["stderr"], "")
+        self.assertEqual(body["exit_code"], 0)
+        self.assertEqual(body["files"], {})
 
-    def test_str_body(self):
-        event = {
-            "body": '{"code": "print(\'Hello, World!\')"}'
-        }
-        context = None
-        response = lambda_handler(event, context)
-        self.assertEqual(response['statusCode'], 200)
-        self.assertIn("Hello, World!", response['body'])
+    def test_missing_code(self):
+        event = {}
+        response = lambda_handler(event, self.context)
+        body = json.loads(response["body"])
 
-    def test_file(self):
-        event = {
-            "body": {
-                "code": "open('/tmp/out/foo.txt', 'w').write('Hi').close()"
-            }
-        }
-        context = None
-        response = lambda_handler(event, context)
-        self.assertEqual(response['statusCode'], 200)
-        self.assertIn("foo.txt", json.loads(response['body'])['files'][0]['name'])
+        self.assertEqual(response["statusCode"], 400)
+        self.assertEqual(body["error"], "No 'code' field provided in event")
+        self.assertEqual(body["stdout"], "")
+        self.assertEqual(body["stderr"], "")
+        self.assertEqual(body["exit_code"], -1)
+        self.assertEqual(body["files"], {})
 
-    def test_multiple_files(self):
-        event = {
-            "body": {
-                "code": "open('/tmp/out/foo.txt', 'w').write('Hi'); open('/tmp/out/bar.txt', 'w').write('Hi')"
-            }
-        }
-        context = None
-        response = lambda_handler(event, context)
-        self.assertEqual(response['statusCode'], 200)
-        self.assertIn("foo.txt", json.loads(response['body'])['files'][0]['name'])
-        self.assertIn("bar.txt", json.loads(response['body'])['files'][1]['name'])
+    def test_invalid_code(self):
+        event = {"code": "print('Hello'  # Missing closing parenthesis"}
+        response = lambda_handler(event, self.context)
+        body = json.loads(response["body"])
 
-    def test_pillow_library(self):
-        event = {
-            "body": {
-                "code": "from PIL import Image; Image.new('RGB', (60, 30), color = 'red').save('/tmp/out/foo.png')"
-            }
-        }
-        context = None
-        response = lambda_handler(event, context)
-        self.assertEqual(response['statusCode'], 200)
-        self.assertIn("foo.png", json.loads(response['body'])['files'][0]['name'])
+        self.assertEqual(response["statusCode"], 200)
+        self.assertEqual(body["stdout"], "")
+        self.assertTrue("SyntaxError" in body["stderr"])
+        self.assertEqual(body["exit_code"], 1)
+        self.assertEqual(body["files"], {})
 
+    def test_file_creation(self):
+        event = {"code": "with open('output.txt', 'w') as f: f.write('Test content'); print('File created')"}
+        response = lambda_handler(event, self.context)
+        body = json.loads(response["body"])
+
+        self.assertEqual(response["statusCode"], 200)
+        self.assertEqual(body["stdout"], "File created\n")
+        self.assertEqual(body["stderr"], "")
+        self.assertEqual(body["exit_code"], 0)
+        self.assertIn("output.txt", body["files"])
+        self.assertEqual(body["files"]["output.txt"], base64.b64encode(b"Test content").decode("utf-8"))
 
 if __name__ == "__main__":
     unittest.main()

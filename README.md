@@ -16,5 +16,16 @@ result = r.post(url, json={"code": "print('Hi')"}).json()
 
 print(result)
 
-# {'error': None, 'stdout': 'Hi\n', 'stderr': '', 'files': []}
+# Example result
+
+{
+    "statusCode": int,
+    "body": {
+        "error": str,
+        "stdout": str,
+        "stderr": str,
+        "exit_code": int,
+        "files": {str: str} # Map of filename and content in base64
+    }
+}
 ```
