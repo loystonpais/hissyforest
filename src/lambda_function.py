@@ -8,12 +8,13 @@ import unittest
 
 def lambda_handler(event, context):
     try:
-        code = event.get("code")
+        body = event.get("body", {})
+        code = body.get("code")
         if not code:
             return {
                 "statusCode": 400,
                 "body": json.dumps({
-                    "error": "No 'code' field provided in event",
+                    "error": "No 'code' field provided",
                     "stdout": "",
                     "stderr": "",
                     "exit_code": -1,
@@ -114,7 +115,7 @@ class TestLambdaHandler(unittest.TestCase):
         self.context = None
 
     def test_successful_execution(self):
-        event = {"code": "print('Hello, World!')"}
+        event = {"body": {"code": "print('Hello, World!')"}}
         response = lambda_handler(event, self.context)
         body = json.loads(response["body"])
 
@@ -125,7 +126,7 @@ class TestLambdaHandler(unittest.TestCase):
         self.assertEqual(body["files"], {})
 
     def test_module_import(self):
-        event = {"code": "import PIL"}
+        event = {"body": {"code": "import PIL"}}
         response = lambda_handler(event, self.context)
         body = json.loads(response["body"])
 
@@ -136,19 +137,19 @@ class TestLambdaHandler(unittest.TestCase):
         self.assertEqual(body["files"], {})
 
     def test_missing_code(self):
-        event = {}
+        event = {"body": {}}
         response = lambda_handler(event, self.context)
         body = json.loads(response["body"])
 
         self.assertEqual(response["statusCode"], 400)
-        self.assertEqual(body["error"], "No 'code' field provided in event")
+        self.assertEqual(body["error"], "No 'code' field provided")
         self.assertEqual(body["stdout"], "")
         self.assertEqual(body["stderr"], "")
         self.assertEqual(body["exit_code"], -1)
         self.assertEqual(body["files"], {})
 
     def test_invalid_code(self):
-        event = {"code": "print('Hello'  # Missing closing parenthesis"}
+        event = {"body": {"code": "print('Hello'  # Missing closing parenthesis"}}
         response = lambda_handler(event, self.context)
         body = json.loads(response["body"])
 
@@ -159,7 +160,7 @@ class TestLambdaHandler(unittest.TestCase):
         self.assertEqual(body["files"], {})
 
     def test_file_creation(self):
-        event = {"code": "with open('output.txt', 'w') as f: f.write('Test content'); print('File created')"}
+        event = {"body": {"code": "with open('output.txt', 'w') as f: f.write('Test content'); print('File created')"}}
         response = lambda_handler(event, self.context)
         body = json.loads(response["body"])
 
