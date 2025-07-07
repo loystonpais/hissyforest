@@ -8,7 +8,20 @@ import unittest
 
 def lambda_handler(event, context):
     try:
-        body = event.get("body", {})
+        try:
+            body = json.loads(event.get("body", "{}"))
+        except json.JSONDecodeError as e:
+            return {
+                "statusCode": 400,
+                "body": json.dumps({
+                    "error": f"Invalid JSON in body: {str(e)}",
+                    "stdout": "",
+                    "stderr": "",
+                    "exit_code": -1,
+                    "files": {}
+                })
+            }
+
         code = body.get("code")
         if not code:
             return {
@@ -19,7 +32,7 @@ def lambda_handler(event, context):
                     "stderr": "",
                     "exit_code": -1,
                     "files": {}
-                } )
+                })
             }
 
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -115,7 +128,7 @@ class TestLambdaHandler(unittest.TestCase):
         self.context = None
 
     def test_successful_execution(self):
-        event = {"body": {"code": "print('Hello, World!')"}}
+        event = {"body": json.dumps({"code": "print('Hello, World!')"})}
         response = lambda_handler(event, self.context)
         body = json.loads(response["body"])
 
@@ -126,7 +139,7 @@ class TestLambdaHandler(unittest.TestCase):
         self.assertEqual(body["files"], {})
 
     def test_module_import(self):
-        event = {"body": {"code": "import PIL"}}
+        event = {"body": json.dumps({"code": "import PIL"})}
         response = lambda_handler(event, self.context)
         body = json.loads(response["body"])
 
@@ -137,7 +150,7 @@ class TestLambdaHandler(unittest.TestCase):
         self.assertEqual(body["files"], {})
 
     def test_missing_code(self):
-        event = {"body": {}}
+        event = {"body": json.dumps({})}
         response = lambda_handler(event, self.context)
         body = json.loads(response["body"])
 
@@ -149,7 +162,7 @@ class TestLambdaHandler(unittest.TestCase):
         self.assertEqual(body["files"], {})
 
     def test_invalid_code(self):
-        event = {"body": {"code": "print('Hello'  # Missing closing parenthesis"}}
+        event = {"body": json.dumps({"code": "print('Hello'  # Missing closing parenthesis"})}
         response = lambda_handler(event, self.context)
         body = json.loads(response["body"])
 
@@ -160,7 +173,7 @@ class TestLambdaHandler(unittest.TestCase):
         self.assertEqual(body["files"], {})
 
     def test_file_creation(self):
-        event = {"body": {"code": "with open('output.txt', 'w') as f: f.write('Test content'); print('File created')"}}
+        event = {"body": json.dumps({"code": "with open('output.txt', 'w') as f: f.write('Test content'); print('File created')"})}
         response = lambda_handler(event, self.context)
         body = json.loads(response["body"])
 
@@ -170,6 +183,18 @@ class TestLambdaHandler(unittest.TestCase):
         self.assertEqual(body["exit_code"], 0)
         self.assertIn("output.txt", body["files"])
         self.assertEqual(body["files"]["output.txt"], base64.b64encode(b"Test content").decode("utf-8"))
+
+    def test_invalid_json_body(self):
+        event = {"body": "invalid json"}
+        response = lambda_handler(event, self.context)
+        body = json.loads(response["body"])
+
+        self.assertEqual(response["statusCode"], 400)
+        self.assertTrue("Invalid JSON in body" in body["error"])
+        self.assertEqual(body["stdout"], "")
+        self.assertEqual(body["stderr"], "")
+        self.assertEqual(body["exit_code"], -1)
+        self.assertEqual(body["files"], {})
 
 if __name__ == "__main__":
     unittest.main()
