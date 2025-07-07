@@ -28,4 +28,13 @@ print(result)
         "files": {str: str} # Map of filename and content in base64
     }
 }
+
+
+>>> r.post(url, json={"code": "print('Hello')"}).json()
+{'stdout': 'Hello\n', 'stderr': '', 'exit_code': 0, 'files': {}}
+>>> r.post(url, json={"code": "print('Hello'); import os; os.system('echo foo >> lol')"}).json()
+{'stdout': 'Hello\n', 'stderr': '', 'exit_code': 0, 'files': {'lol': 'Zm9vCg=='}}
+>>> r.post(url, json={"code": "print('Hello'); syntaxerr;'"}).json()
+{'stdout': '', 'stderr': '  File "/tmp/tmpbam910xx/script.py", line 1\n    print(\'Hello\'); syntaxerr;\'\n                              ^\nSyntaxError: unterminated string literal (detected at line 1)\n', 'exit_code': 1, 'files': {}}
+>>>
 ```
